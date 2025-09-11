@@ -1,2 +1,4 @@
-forge-std/=node_modules/forge-std/src/
-drosera-contracts/=node_modules/drosera-contracts/src/
+drosera-contracts/=lib/contracts/src/
+@chainlink/contracts/=lib/chainlink-evm/contracts/src/
+forge-std/=lib/forge-std/src/
+openzeppelin-contracts/=lib/openzeppelin-contracts/contracts/

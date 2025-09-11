@@ -6,5 +6,11 @@
   },
   "dependencies": {
     "drosera-contracts": "https://github.com/drosera-network/contracts"
+  },
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "peerDependencies": {
+    "typescript": "^5"
   }
 }
