@@ -1,152 +1,160 @@
-import {Test} from "forge-std/Test.sol";
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {Test, console} from "forge-std/Test.sol";
 import {VolatileCollateralVelocityTrap} from "../src/VolatileCollateralVelocityTrap.sol";
 import {TrapResponse} from "../src/TrapResponse.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/v0.8/shared/interfaces/AggregatorV3Interface.sol";
-import {IERC20} from "openzeppelin-contracts/token/ERC20/IERC20.sol";
-
-// Mock Contracts
-contract MockPriceFeed is AggregatorV3Interface {
-    int256 public price;
-
-    function decimals() external view returns (uint8) {
-        return 8;
-    }
-
-    function description() external view returns (string memory) {
-        return "Mock Price Feed";
-    }
-
-    function version() external view returns (uint256) {
-        return 1;
-    }
-
-    function getRoundData(uint80) external view returns (uint80, int256, uint256, uint256, uint80) {
-        return (1, price, 1, 1, 1);
-    }
-
-    function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80) {
-        return (1, price, 1, 1, 1);
-    }
-
-    function setPrice(int256 _price) external {
-        price = _price;
-    }
-}
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract VolatileCollateralVelocityTrapTest is Test {
     VolatileCollateralVelocityTrap public trap;
-    MockPriceFeed public mockPriceFeed;
     TrapResponse public trapResponse;
-
-    address public constant WHITELISTED_OPERATOR = 0x5000000000000000000000000000000000000000;
+    address public guardian = address(this);
 
     function setUp() public {
-        // Deploy the trap contract
         trap = new VolatileCollateralVelocityTrap();
-
-        // Deploy mocks
-        mockPriceFeed = new MockPriceFeed();
-
-        vm.etch(trap.PRICE_FEED_ADDRESS(), address(mockPriceFeed).code);
-
-        // Deploy the response contract
-        trapResponse = new TrapResponse();
+        trapResponse = new TrapResponse(guardian);
     }
 
     function _setCollateralBalance(uint256 balance) internal {
         vm.mockCall(
             trap.COLLATERAL_TOKEN_ADDRESS(),
-            abi.encodeWithSelector(
-                IERC20.balanceOf.selector,
-                trap.WHALE_ADDRESS()
-            ),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, trap.WHALE_ADDRESS()),
             abi.encode(balance)
         );
     }
 
-    function test_Collect() public {
-        // Set mock values
-        _setCollateralBalance(1000e18);
-        MockPriceFeed(trap.PRICE_FEED_ADDRESS()).setPrice(2000e8);
+    function _setPrice(int256 price, uint8 decimals) internal {
+        vm.mockCall(
+            trap.PRICE_FEED_ADDRESS(),
+            abi.encodeWithSelector(AggregatorV3Interface.latestRoundData.selector),
+            abi.encode(0, price, 0, 0, 0)
+        );
+        vm.mockCall(
+            trap.PRICE_FEED_ADDRESS(),
+            abi.encodeWithSelector(AggregatorV3Interface.decimals.selector),
+            abi.encode(decimals)
+        );
+    }
 
-        // Call collect
-        vm.prank(WHITELISTED_OPERATOR);
+    function test_Collect() public {
+        _setCollateralBalance(1000e18);
+        _setPrice(2000e8, 8);
+
         bytes memory data = trap.collect();
 
-        // Decode and assert
-        (uint256 balance, int256 price) = abi.decode(data, (uint256, int256));
-        assertEq(balance, 1000e18);
+        (uint256 bal, int256 price, uint8 decs, uint256 ts) = abi.decode(data, (uint256, int256, uint8, uint256));
+
+        assertEq(bal, 1000e18);
         assertEq(price, 2000e8);
+        assertEq(decs, 8);
+        assertTrue(ts > 0);
     }
 
-    function test_ShouldRespond_NoTrigger_BalanceChangeBelowThreshold() public {
-        // Set initial values
+    function test_ShouldRespond_Trigger_8_Decimals() public {
+        // State 0
         _setCollateralBalance(1000e18);
-        MockPriceFeed(trap.PRICE_FEED_ADDRESS()).setPrice(2000e8);
-        vm.prank(WHITELISTED_OPERATOR);
+        _setPrice(2000e8, 8);
         bytes memory data0 = trap.collect();
 
-        // Change values (balance change below threshold)
-        _setCollateralBalance(1001e18);
-        MockPriceFeed(trap.PRICE_FEED_ADDRESS()).setPrice(1900e8);
-        vm.prank(WHITELISTED_OPERATOR);
-        bytes memory data1 = trap.collect();
-
-        // Check shouldRespond
-        bytes[] memory data = new bytes[](2);
-        data[0] = data0;
-        data[1] = data1;
-        (bool triggered, ) = trap.shouldRespond(data);
-        assertEq(triggered, false);
-    }
-
-    function test_ShouldRespond_NoTrigger_PriceChangeBelowThreshold() public {
-        // Set initial values
-        _setCollateralBalance(1000e18);
-        MockPriceFeed(trap.PRICE_FEED_ADDRESS()).setPrice(2000e8);
-        vm.prank(WHITELISTED_OPERATOR);
-        bytes memory data0 = trap.collect();
-
-        // Change values (price change below threshold)
-        _setCollateralBalance(2001e18);
-        MockPriceFeed(trap.PRICE_FEED_ADDRESS()).setPrice(1999e8);
-        vm.prank(WHITELISTED_OPERATOR);
-        bytes memory data1 = trap.collect();
-
-        // Check shouldRespond
-        bytes[] memory data = new bytes[](2);
-        data[0] = data0;
-        data[1] = data1;
-        (bool triggered, ) = trap.shouldRespond(data);
-        assertEq(triggered, false);
-    }
-
-    function test_ShouldRespond_Trigger() public {
-        // Set initial values
-        _setCollateralBalance(1000e18);
-        MockPriceFeed(trap.PRICE_FEED_ADDRESS()).setPrice(2000e8);
-        vm.prank(WHITELISTED_OPERATOR);
-        bytes memory data0 = trap.collect();
-
-        // Change values (both above threshold)
+        // State 1
+        vm.warp(block.timestamp + 1);
         _setCollateralBalance(3000e18);
-        MockPriceFeed(trap.PRICE_FEED_ADDRESS()).setPrice(1900e8);
-        vm.prank(WHITELISTED_OPERATOR);
+        _setPrice(1900e8, 8);
         bytes memory data1 = trap.collect();
 
-        // Check shouldRespond
         bytes[] memory data = new bytes[](2);
-        data[0] = data0;
-        data[1] = data1;
+        data[0] = data1;
+        data[1] = data0;
+
         (bool triggered, bytes memory responseData) = trap.shouldRespond(data);
+        assertTrue(triggered, "Trap should have triggered");
+
+        (address whale, uint256 b0, uint256 b1, int256 p0, int256 p1, uint256 ts) = abi.decode(responseData, (address, uint256, uint256, int256, int256, uint256));
+        assertEq(whale, trap.WHALE_ADDRESS());
+        assertEq(b0, 1000e18);
+        assertEq(b1, 3000e18);
+        assertEq(p0, 2000e8);
+        assertEq(p1, 1900e8);
+        assertTrue(ts > 0);
+    }
+
+    function test_ShouldRespond_Trigger_18_Decimals() public {
+        // State 0
+        _setCollateralBalance(1000e18);
+        _setPrice(2000e18, 18);
+        bytes memory data0 = trap.collect();
+
+        // State 1
+        vm.warp(block.timestamp + 1);
+        _setCollateralBalance(3000e18);
+        _setPrice(1900e18, 18);
+        bytes memory data1 = trap.collect();
+
+        bytes[] memory data = new bytes[](2);
+        data[0] = data1;
+        data[1] = data0;
+
+        (bool triggered, bytes memory responseData) = trap.shouldRespond(data);
+        assertTrue(triggered, "Trap should have triggered with 18 decimals");
+
+        (address whale, uint256 b0, uint256 b1, int256 p0_norm, int256 p1_norm, uint256 ts) = abi.decode(responseData, (address, uint256, uint256, int256, int256, uint256));
+        assertEq(whale, trap.WHALE_ADDRESS());
+        assertEq(b0, 1000e18);
+        assertEq(b1, 3000e18);
+        assertEq(p0_norm, 2000e8, "Price 0 should be normalized to 8 decimals");
+        assertEq(p1_norm, 1900e8, "Price 1 should be normalized to 8 decimals");
+        assertTrue(ts > 0);
+    }
+
+    function test_ShouldRespond_NoTrigger_PriceBelowThreshold() public {
+        _setCollateralBalance(1000e18);
+        _setPrice(2000e8, 8);
+        bytes memory data0 = trap.collect();
+
+        vm.warp(block.timestamp + 1);
+        _setCollateralBalance(3000e18);
+        _setPrice(1990e8, 8);
+        bytes memory data1 = trap.collect();
+
+        bytes[] memory data = new bytes[](2);
+        data[0] = data1;
+        data[1] = data0;
+
+        (bool triggered, bytes memory reason) = trap.shouldRespond(data);
+        assertEq(triggered, false, "Trap should not trigger if price change is too low");
+        assertEq(string(reason), "price_below");
+    }
+
+    function test_ResponseContract_Guardian() public {
+        (bool triggered, bytes memory responseData) = _getTriggerData();
         assertTrue(triggered);
 
-        // Check response data
-        (address whale, uint256 balance0, uint256 balance1, int256 price0, int256 price1) = abi.decode(responseData, (address, uint256, uint256, int256, int256));
-        assertEq(whale, trap.WHALE_ADDRESS());
-        assertEq(balance0, 1000e18);
-        assertEq(balance1, 3000e18);
-        assertEq(price0, 2000e8);
-        assertEq(price1, 1900e8);
+        // Should succeed when called by guardian
+        vm.prank(guardian);
+        trapResponse.executeResponse(responseData);
+
+        // Should fail when called by another address
+        vm.expectRevert("unauthorized");
+        vm.prank(address(0x123));
+        trapResponse.executeResponse(responseData);
+    }
+
+    function _getTriggerData() internal returns (bool, bytes memory) {
+        _setCollateralBalance(1000e18);
+        _setPrice(2000e8, 8);
+        bytes memory data0 = trap.collect();
+
+        vm.warp(block.timestamp + 1);
+        _setCollateralBalance(3000e18);
+        _setPrice(1900e8, 8);
+        bytes memory data1 = trap.collect();
+
+        bytes[] memory data = new bytes[](2);
+        data[0] = data1;
+        data[1] = data0;
+
+        return trap.shouldRespond(data);
     }
 }

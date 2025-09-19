@@ -5,16 +5,18 @@ name = "VolatileCollateralVelocityTrap"
 # This is relative to the project root.
 source = "src/VolatileCollateralVelocityTrap.sol"
 
-# The constructor arguments for the trap contract.
-# The user said no constructor args, so this should be empty.
-constructor_args = []
-
 # The network to deploy to.
 network = "hoodi"
 
 # The address of the response contract.
-# This will be deployed separately with Foundry.
-response_contract_address = "0x..." # Placeholder
+response_contract_address = "0x..." # Placeholder: Deploy TrapResponse and update this
 
-# The ABI of the shouldRespond function.
-should_respond_abi = "function shouldRespond(bytes[] calldata data) external pure returns (bool, bytes memory)"
+# The function signature for the response contract.
+response_function = "executeResponse(bytes)"
+
+# Drosera operator settings
+private_trap = true
+whitelist = ["0x..." # Placeholder: Add your operator address here]
+
+# Number of blocks to sample for shouldRespond
+block_sample_size = 2
